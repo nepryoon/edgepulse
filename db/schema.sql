@@ -1,203 +1,181 @@
-openapi: 3.1.0
-info:
-  title: EdgePulse Anomaly API
-  version: 0.1.0
-  description: Multi-tenant time-series ingestion + anomaly detection.
-servers:
-  - url: https://api.example.com
-security:
-  - ApiKeyAuth: []
-components:
-  securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
+-- Enable UUID generation (pgcrypto provides gen_random_uuid()).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-  schemas:
-    Error:
-      type: object
-      required: [error, message, request_id]
-      properties:
-        error: { type: string }
-        message: { type: string }
-        request_id: { type: string }
+-- Core
+CREATE TABLE tenants (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  plan text NOT NULL DEFAULT 'free',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
-    IngestMetricPoint:
-      type: object
-      required: [name, ts, value]
-      properties:
-        name: { type: string, minLength: 1 }
-        ts: { type: string, format: date-time }
-        value: { type: number }
-        unit: { type: string }
+CREATE TABLE users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  email text NOT NULL,
+  role text NOT NULL DEFAULT 'admin',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, email)
+);
 
-    IngestRequest:
-      type: object
-      required: [device_external_id, metrics]
-      properties:
-        device_external_id: { type: string, minLength: 1 }
-        metrics:
-          type: array
-          minItems: 1
-          items: { $ref: "#/components/schemas/IngestMetricPoint" }
+CREATE TABLE api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  key_prefix text NOT NULL,          -- e.g., first 8-10 chars for lookup
+  key_hash bytea NOT NULL,           -- store a hash (e.g., SHA-256) of the full key
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz,
+  revoked_at timestamptz,
+  UNIQUE (tenant_id, key_prefix)
+);
 
-    IngestResponse:
-      type: object
-      required: [batch_id, accepted, dropped]
-      properties:
-        batch_id: { type: string }
-        accepted: { type: integer, minimum: 0 }
-        dropped: { type: integer, minimum: 0 }
+CREATE TABLE devices (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  external_id text NOT NULL,         -- client-provided stable id
+  label text NOT NULL,
+  tags jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, external_id)
+);
 
-    Device:
-      type: object
-      required: [id, external_id, label]
-      properties:
-        id: { type: string, format: uuid }
-        external_id: { type: string }
-        label: { type: string }
-        tags: { type: object }
+CREATE TABLE metrics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  unit text,
+  freq_hint_seconds int,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, device_id, name)
+);
 
-    Metric:
-      type: object
-      required: [id, device_id, name]
-      properties:
-        id: { type: string, format: uuid }
-        device_id: { type: string, format: uuid }
-        name: { type: string }
-        unit: { type: string }
-        freq_hint: { type: integer, description: "Optional sampling frequency hint in seconds." }
+-- Ingestion
+CREATE TABLE ingestion_batches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  r2_object_key text NOT NULL,
+  message_count int NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'received',  -- received|processed|failed
+  error text
+);
 
-    AnomalyScore:
-      type: object
-      required: [metric_id, window_end, score]
-      properties:
-        metric_id: { type: string, format: uuid }
-        window_end: { type: string, format: date-time }
-        score: { type: number }
-        label: { type: string }
-        explanation: { type: object }
+-- Time-series datapoints (MVP: single table; partition later if needed)
+CREATE TABLE datapoints (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  ts timestamptz NOT NULL,
+  value double precision NOT NULL,
+  quality_flags smallint NOT NULL DEFAULT 0,
+  inserted_at timestamptz NOT NULL DEFAULT now()
+);
 
-    AlertRule:
-      type: object
-      required: [id, metric_id, condition, channels, enabled]
-      properties:
-        id: { type: string, format: uuid }
-        metric_id: { type: string, format: uuid }
-        condition: { type: object }
-        channels: { type: object }
-        enabled: { type: boolean }
+CREATE INDEX idx_datapoints_metric_time ON datapoints (tenant_id, metric_id, ts DESC);
 
-    Webhook:
-      type: object
-      required: [id, url, enabled]
-      properties:
-        id: { type: string, format: uuid }
-        url: { type: string }
-        enabled: { type: boolean }
+-- Features + models
+CREATE TABLE feature_sets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  window_size_sec int NOT NULL,
+  version int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, metric_id, window_size_sec, version)
+);
 
-paths:
-  /v1/health:
-    get:
-      security: []
-      responses:
-        "200":
-          description: OK
+CREATE TABLE feature_rows (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  window_start timestamptz NOT NULL,
+  window_end timestamptz NOT NULL,
+  feature_set_id uuid REFERENCES feature_sets(id) ON DELETE SET NULL,
+  features jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
-  /v1/ingest:
-    post:
-      summary: Ingest time-series points for a device
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/IngestRequest" }
-      responses:
-        "202":
-          description: Accepted
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/IngestResponse" }
-        "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+CREATE INDEX idx_feature_rows_metric_end ON feature_rows (tenant_id, metric_id, window_end DESC);
 
-  /v1/devices:
-    get:
-      summary: List devices
-      responses:
-        "200":
-          description: OK
-    post:
-      summary: Create device
-      responses:
-        "201":
-          description: Created
+CREATE TABLE models (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  model_type text NOT NULL,                 -- isolation_forest|baseline|autoencoder (later)
+  model_uri text NOT NULL,                  -- r2://... or s3://...
+  trained_from timestamptz,
+  trained_to timestamptz,
+  training_metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  active boolean NOT NULL DEFAULT false
+);
 
-  /v1/metrics:
-    get:
-      summary: List metrics
-      parameters:
-        - in: query
-          name: device_id
-          schema: { type: string, format: uuid }
-      responses:
-        "200":
-          description: OK
-    post:
-      summary: Create metric
-      responses:
-        "201":
-          description: Created
+CREATE INDEX idx_models_active ON models (tenant_id, metric_id) WHERE active = true;
 
-  /v1/anomalies:
-    get:
-      summary: Query anomaly scores
-      parameters:
-        - in: query
-          name: metric_id
-          required: true
-          schema: { type: string, format: uuid }
-        - in: query
-          name: from
-          required: true
-          schema: { type: string, format: date-time }
-        - in: query
-          name: to
-          required: true
-          schema: { type: string, format: date-time }
-      responses:
-        "200":
-          description: OK
+-- Scoring + alerts
+CREATE TABLE anomaly_scores (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  model_id uuid REFERENCES models(id) ON DELETE SET NULL,
+  window_end timestamptz NOT NULL,
+  score double precision NOT NULL,
+  label text,
+  explanation jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
-  /v1/alert-rules:
-    get:
-      summary: List alert rules
-      responses:
-        "200":
-          description: OK
-    post:
-      summary: Create alert rule
-      responses:
-        "201":
-          description: Created
+CREATE INDEX idx_anomaly_scores_metric_end ON anomaly_scores (tenant_id, metric_id, window_end DESC);
 
-  /v1/webhooks:
-    get:
-      summary: List webhooks
-      responses:
-        "200":
-          description: OK
-    post:
-      summary: Create webhook
-      responses:
-        "201":
-          description: Created
+CREATE TABLE webhooks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  url text NOT NULL,
+  secret text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE alert_rules (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  condition jsonb NOT NULL,         -- e.g., {"threshold":75,"min_consecutive":2}
+  channels jsonb NOT NULL,          -- e.g., {"webhook_ids":[...], "email":false}
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_alert_rules_metric ON alert_rules (tenant_id, metric_id) WHERE enabled = true;
+
+CREATE TABLE alert_events (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  rule_id uuid NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+  metric_id uuid NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  window_end timestamptz NOT NULL,
+  score double precision NOT NULL,
+  delivered_channels jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Billing / usage (stub for MVP)
+CREATE TABLE subscriptions (
+  tenant_id uuid PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  provider text NOT NULL DEFAULT 'stripe',
+  provider_customer_id text,
+  status text NOT NULL DEFAULT 'inactive',
+  current_period_end timestamptz
+);
+
+CREATE TABLE usage_daily (
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  day date NOT NULL,
+  ingested_points bigint NOT NULL DEFAULT 0,
+  scored_windows bigint NOT NULL DEFAULT 0,
+  alerts_sent bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, day)
+);
