@@ -2,12 +2,6 @@
 
 EdgePulse is an end-to-end, production-oriented micro-SaaS for ingesting time-series telemetry (IoT sensors, energy meters, industrial signals, and application/infra metrics) and detecting anomalies in near real time.
 
-It is designed as a portfolio-grade system that demonstrates:
-- **Cloud-native engineering** (Cloudflare Workers/Queues/R2/Pages + AWS Fargate/RDS/Scheduler)
-- **Data engineering** (SQL-first persistence, durable ingestion, reproducible pipelines)
-- **Applied ML** (baseline anomaly detection with scikit-learn; PyTorch-ready upgrade path)
-- A clear path to **monetisation** as a subscription API (usage + retention + alerting tiers)
-
 ---
 
 ## Table of contents
