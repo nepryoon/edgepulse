@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgepulse-ml"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "scikit-learn>=1.5",
+  "psycopg[binary]>=3.2",
+  "typer>=0.12",
+  "pydantic>=2.8"
+]
+
+[project.scripts]
+edgepulse-ml = "edgepulse_ml.cli:app"
