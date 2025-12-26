@@ -1,0 +1,83 @@
+# EdgePulse MVP GitHub Issues Checklist
+
+Use this checklist to create GitHub Issues and group them under Milestones:
+- **MVP-1 Ingestion & Persistence**
+- **MVP-2 Baseline Scoring**
+- **MVP-3 Query API + Dashboard**
+- **MVP-4 Webhook Alerts** (optional)
+
+Suggested labels:
+- `mvp`, `epic`, `backend`, `frontend`, `ml`, `infra`, `security`, `docs`, `good-first-issue`
+
+---
+
+## MVP-1 — Ingestion & Persistence (Epic)
+- [ ] (backend, security) Create `tenant_api_keys` hashing strategy (prefix + sha256 with pepper)
+- [ ] (backend) Implement `GET /v1/health`
+- [ ] (backend) Implement `POST /v1/ingest` route (auth + validation)
+- [ ] (backend) Add R2 raw archive write with deterministic key structure
+- [ ] (backend) Add Queue producer message for each accepted ingest
+- [ ] (backend) Implement Queue consumer to normalise payload into Postgres
+- [ ] (backend) Implement device upsert (tenant_id + external_id)
+- [ ] (backend) Implement metric upsert (tenant_id + device_id + name)
+- [ ] (backend) Insert datapoints with `ingest_batch_id`
+- [ ] (infra) Provision Cloudflare R2 + Queue (Terraform or Wrangler)
+- [ ] (infra) Provision Postgres (AWS RDS for cloud; Docker for local)
+- [ ] (docs) Add `docs/db/schema.sql` and migration plan (Alembic optional)
+- [ ] (tests) Add integration test: ingest → queue consumer → datapoints in DB
+
+**Acceptance check**
+- [ ] Send sample payload: API returns 202 with `batch_id` and `r2_key`
+- [ ] Confirm R2 object exists
+- [ ] Confirm datapoints exist in Postgres
+
+---
+
+## MVP-2 — Baseline Scoring (Epic)
+- [ ] (ml) Implement feature extraction module (windowing + robust stats)
+- [ ] (ml) Implement training command (IsolationForest v1)
+- [ ] (ml) Persist model artefact and upsert row in `models`
+- [ ] (ml) Implement scoring command (write to `anomaly_scores`)
+- [ ] (infra) Build/push Docker image to ECR
+- [ ] (infra) ECS/Fargate task definition for scoring
+- [ ] (infra) EventBridge Scheduler triggers scoring hourly (or daily for MVP)
+- [ ] (tests) Add smoke test: train then score for a known metric
+
+**Acceptance check**
+- [ ] `models` contains `isolation_forest_v1` entry for metric
+- [ ] `anomaly_scores` contains scored windows for time range
+
+---
+
+## MVP-3 — Query API + Dashboard (Epic)
+- [ ] (backend) Implement `GET /v1/anomalies` endpoint (params + auth)
+- [ ] (backend) Add pagination (optional) and consistent error responses
+- [ ] (frontend) Create dashboard scaffold (Vite/React or Next)
+- [ ] (frontend) Implement metric picker (device → metric)
+- [ ] (frontend) Implement anomalies view (table + simple chart)
+- [ ] (frontend) Configure API base URL via env var
+- [ ] (infra) Deploy dashboard to Cloudflare Pages
+- [ ] (docs) Update README with dashboard screenshots/usage
+
+**Acceptance check**
+- [ ] Dashboard shows anomalies for selected metric within a time range
+
+---
+
+## MVP-4 — Webhook Alerts (Optional Epic)
+- [ ] (backend, ml) Define alert rule model + DB tables (`alert_rules`, `alert_events`, `webhooks`)
+- [ ] (backend) Implement CRUD endpoints for webhooks and alert rules
+- [ ] (ml) Evaluate alert rules during scoring; persist `alert_events`
+- [ ] (backend) Deliver signed webhook (HMAC) with retries + audit
+- [ ] (tests) Test signature verification and retry logic
+
+**Acceptance check**
+- [ ] Threshold breach triggers an alert event and webhook delivery record
+
+---
+
+## Operational / Quality
+- [ ] (security) Add secret scanning / prevent `.env` commits
+- [ ] (docs) Document local dev runbook (ingest → train → score)
+- [ ] (infra) Add staging environment support (optional)
+- [ ] (observability) Add structured logs with `tenant_id` and `batch_id`
