@@ -1,0 +1,31 @@
+name = "edgepulse-ingest"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# --- R2 binding (raw payload archive)
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "edgepulse-raw"
+# Uncomment for local dev to hit the real remote bucket:
+# preview_bucket_name = "edgepulse-raw"
+
+# --- Queue bindings
+[[queues.producers]]
+queue = "edgepulse-ingest-q"
+binding = "INGEST_QUEUE"
+
+[[queues.consumers]]
+queue = "edgepulse-ingest-q"
+max_batch_size = 10
+max_batch_timeout = 5
+
+# --- Hyperdrive binding (Postgres via Hyperdrive)
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_YOUR_HYPERDRIVE_ID"
+# Optional: local database for wrangler dev
+# localConnectionString = "postgres://postgres:postgres@127.0.0.1:5432/edgepulse"
+
+[vars]
+API_KEY_PEPPER = "REPLACE_ME"
