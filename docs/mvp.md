@@ -9,7 +9,7 @@ This document defines the Minimum Viable Product (MVP) scope for **EdgePulse**, 
 - Support basic operational visibility (health checks, ingestion status).
 - Create a credible foundation for monetisation (tenant isolation, usage counting, retention).
 
-## Non-goals (explicitly out of scope for MVP)
+## Non-goals
 - Real-time streaming dashboards with sub-second latency.
 - Complex multi-model ensembles or deep learning models (PyTorch upgrade is post-MVP).
 - Full billing integration (Stripe), invoices, VAT, etc. (usage metering only).
