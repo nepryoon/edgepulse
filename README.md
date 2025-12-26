@@ -337,11 +337,6 @@ Contributions are welcome:
 2. Keep PRs small and test-backed.
 3. Ensure no secrets are included in commits.
 
-If you plan to accept external contributions, add:
-- `CODE_OF_CONDUCT.md`
-- `CONTRIBUTING.md`
-- Clear governance and security reporting guidance.
-
 ---
 
 ## Licence
