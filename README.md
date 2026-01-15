@@ -1,5 +1,8 @@
 # EdgePulse — Multi-tenant Time-Series Anomaly Detection API (Cloudflare + AWS + Python/ML)
 
+**Live docs:** https://www.neuromorphicinference.com/demos/edgepulse  
+**Evidence index:** https://www.neuromorphicinference.com/evidence  
+
 EdgePulse is an end-to-end, production-oriented micro-SaaS for ingesting time-series telemetry (IoT sensors, energy meters, industrial signals, and application/infra metrics) and detecting anomalies in near real time.
 
 ---
